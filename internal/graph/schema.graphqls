@@ -1,0 +1,13 @@
+type Order {
+  id: ID!
+  customerName: String!
+  totalAmount: Float!
+  status: String!
+  createdAt: Time!
+}
+
+type Query {
+  listOrders: [Order!]!
+}
+
+scalar Time
