@@ -1,20 +1,12 @@
-### Criar um novo pedido
+api.http### Create Order
 POST http://localhost:8080/order
 Content-Type: application/json
 
 {
-  "nomeCliente": "João Silva",
-  "valorTotal": 150.75,
-  "status": "pendente"
+  "customer_id": 1,
+  "total_amount": 100.50,
+  "status": "pending"
 }
 
-### Listar todos os pedidos
+### List Orders
 GET http://localhost:8080/order
-
-### Consulta GraphQL para listar pedidos
-POST http://localhost:8080/graphql
-Content-Type: application/json
-
-{
-  "query": "query { listarPedidos { id nomeCliente valorTotal status criadoEm } }"
-}

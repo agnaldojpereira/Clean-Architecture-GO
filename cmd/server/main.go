@@ -1,58 +1,87 @@
+// cmd/server/main.go
 package main
 
 import (
+	"context"
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/playground"
-	"github.com/seu-usuario/projeto-pedidos/internal/handler"
-	"github.com/seu-usuario/projeto-pedidos/internal/service"
-	"github.com/seu-usuario/projeto-pedidos/pkg/db"
+	"github.com/agnaldojpereira/Clean-Architecture-GO/internal/database"
+	"github.com/agnaldojpereira/Clean-Architecture-GO/internal/repository"
+	"github.com/agnaldojpereira/Clean-Architecture-GO/internal/service"
+	"github.com/agnaldojpereira/Clean-Architecture-GO/pkg/graphql"
+	"github.com/agnaldojpereira/Clean-Architecture-GO/pkg/grpc"
+	"github.com/agnaldojpereira/Clean-Architecture-GO/pkg/rest"
 	"google.golang.org/grpc"
 )
 
 func main() {
-	// Inicializar conexão com o banco de dados
-	database, err := db.InitDB()
+	// Conexão com o banco de dados
+	db, err := database.NewConnection()
 	if err != nil {
-		log.Fatalf("Falha ao inicializar o banco de dados: %v", err)
+		log.Fatalf("Falha ao conectar ao banco de dados: %v", err)
 	}
-	defer database.Close()
+	defer db.Close()
 
-	// Inicializar serviço de pedidos
-	orderService := service.NewOrderService(database)
+	// Inicialização dos componentes
+	orderRepo := repository.NewOrderRepository(db)
+	orderService := service.NewOrderService(orderRepo)
 
-	// Inicializar handler HTTP
-	httpHandler := handler.NewHTTPHandler(orderService)
+	// Configuração do servidor REST
+	restHandler := rest.NewHandler(orderService)
+	http.HandleFunc("/order", restHandler.ListOrders)
 
-	// Inicializar servidor gRPC
-	grpcServer := grpc.NewServer()
-	handler.RegisterOrderServiceServer(grpcServer, handler.NewGRPCHandler(orderService))
+	// Configuração do servidor gRPC
+	grpcServer := grpc.NewServer(orderService)
+	grpcListener, err := net.Listen("tcp", ":50051")
+	if err != nil {
+		log.Fatalf("Falha ao iniciar o listener gRPC: %v", err)
+	}
 
-	// Inicializar servidor GraphQL
-	graphqlHandler := handler.NewGraphQLHandler(orderService)
+	// Configuração do servidor GraphQL
+	graphqlResolver := graphql.NewResolver(orderService)
+	graphqlServer := handler.NewDefaultServer(graphql.NewExecutableSchema(graphql.Config{Resolvers: graphqlResolver}))
+	http.Handle("/graphql", graphqlServer)
+	http.Handle("/playground", playground.Handler("GraphQL playground", "/graphql"))
 
-	// Iniciar servidor HTTP
+	// Iniciar servidores em goroutines separadas
 	go func() {
-		http.Handle("/graphql", graphqlHandler)
-		http.Handle("/", playground.Handler("GraphQL playground", "/graphql"))
-		http.Handle("/order", httpHandler)
-		log.Printf("Servidor HTTP rodando na porta 8080")
-		log.Fatal(http.ListenAndServe(":8080", nil))
-	}()
-
-	// Iniciar servidor gRPC
-	go func() {
-		lis, err := net.Listen("tcp", ":50051")
-		if err != nil {
-			log.Fatalf("Falha ao escutar: %v", err)
+		log.Println("Iniciando servidor REST na porta 8080")
+		if err := http.ListenAndServe(":8080", nil); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Erro ao iniciar servidor HTTP: %v", err)
 		}
-		log.Printf("Servidor gRPC rodando na porta 50051")
-		log.Fatal(grpcServer.Serve(lis))
 	}()
 
-	// Manter a goroutine principal viva
-	select {}
+	go func() {
+		log.Println("Iniciando servidor gRPC na porta 50051")
+		if err := grpcServer.Serve(grpcListener); err != nil {
+			log.Fatalf("Erro ao iniciar servidor gRPC: %v", err)
+		}
+	}()
+
+	// Configuração para graceful shutdown
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	<-stop
+
+	log.Println("Desligando servidores...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := http.Server{}.Shutdown(ctx); err != nil {
+		log.Printf("Erro ao desligar servidor HTTP: %v", err)
+	}
+
+	grpcServer.GracefulStop()
+
+	log.Println("Servidores desligados com sucesso")
 }

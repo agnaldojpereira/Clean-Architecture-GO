@@ -1,13 +1,11 @@
 type Order {
   id: ID!
-  customerName: String!
+  customerId: Int!
   totalAmount: Float!
   status: String!
-  createdAt: Time!
+  createdAt: String!
 }
 
 type Query {
   listOrders: [Order!]!
 }
-
-scalar Time
